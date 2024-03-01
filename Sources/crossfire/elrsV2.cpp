@@ -84,8 +84,8 @@ static constexpr uint8_t DEVICES_MAX_COUNT = 8;
 static uint8_t deviceIds[DEVICES_MAX_COUNT];
 uint8_t devicesLen = 0;
 uint8_t otherDevicesId = 255;
-uint8_t deviceId = 0xEE;
-uint8_t handsetId = 0xEF;
+uint8_t deviceIdERLS = 0xEE;
+uint8_t handsetIdERLS = 0xEF;
 uint8_t deviceIsELRS_TX = 0;
 
 static constexpr uint8_t DEVICE_NAME_MAX_LEN = 20;
@@ -121,7 +121,7 @@ uint8_t reloadFolder = 0;
 
 void crossfireTelemetryPush4(const uint8_t cmd, const uint8_t third, const uint8_t fourth)
 {
-  uint8_t crsfPushData[4] =  { deviceId, handsetId, third, fourth };
+  uint8_t crsfPushData[4] =  { deviceIdERLS, handsetIdERLS, third, fourth };
   crossfireTelemetryPush(cmd, crsfPushData, 4);
 }
 
@@ -474,7 +474,7 @@ void parseDeviceInfoMessage(uint8_t* data)
       fields[devicesLen].nameOffset = namesBufferOffset;
       memcpy(&namesBuffer[namesBufferOffset], &data[3], fields[devicesLen].nameLength);
       namesBufferOffset += fields[devicesLen].nameLength;
-      if (fields[devicesLen].id == deviceId)
+      if (fields[devicesLen].id == deviceIdERLS)
       {
         fields[devicesLen].parent = 255;
       }
@@ -491,10 +491,10 @@ void parseDeviceInfoMessage(uint8_t* data)
     }
     devicesLen++;
   }
-  if (deviceId == id && folderAccess != otherDevicesId)
+  if (deviceIdERLS == id && folderAccess != otherDevicesId)
   {
     memcpy(deviceName, (char *)&data[3], DEVICE_NAME_MAX_LEN);
-    deviceIsELRS_TX = ((memcmp(&data[offset], "ELRS", 4) == 0) && (deviceId == 0xEE)) ? 1 : 0;
+    deviceIsELRS_TX = ((memcmp(&data[offset], "ELRS", 4) == 0) && (deviceIdERLS == 0xEE)) ? 1 : 0;
     uint8_t newFieldCount = data[offset+12];
     reloadAllField();
     if (newFieldCount != fields_count || newFieldCount == 0)
@@ -530,7 +530,7 @@ static const FieldFunctions functions[] =
 
 void parseParameterInfoMessage(uint8_t* data, uint8_t length)
 {
-  if (data[2] != deviceId || data[3] != fieldId)
+  if (data[2] != deviceIdERLS || data[3] != fieldId)
   {
     fieldDataLen = 0; 
     fieldChunk = 0;
@@ -874,8 +874,8 @@ void ELRSV2_stop()
   //runCrossfireTelemetryCallback(nullptr);
   UIbackExec(); 
   fieldPopup = 0;
-  deviceId = 0xEE;
-  handsetId = 0xEF;
+  deviceIdERLS = 0xEE;
+  handsetIdERLS = 0xEF;
   memset(reusableBuffer, 0, 512);
   popMenu(false);
 }

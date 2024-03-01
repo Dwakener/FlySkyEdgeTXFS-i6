@@ -2663,7 +2663,8 @@ void popMenu(bool uppermost)
 
         if(g_menuStack[g_menuStackPtr] ==  menuProcProtocol)
         {
-          resetElrsMenuVariables();
+          //resetElrsMenuVariables();
+          extern void reloadAllField();
         }
         g_menuStackPtr = uppermost ? 0 : g_menuStackPtr-1;
 				EnterMenu = EVT_ENTRY_UP ;
