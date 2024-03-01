@@ -55,8 +55,11 @@
 
 #define CRSF_TELEMETRY_LENGTH_INDEX 1
 #define CRSF_TELEMETRY_TYPE_INDEX 2
+#define CRSF_TELEMETRY_FIELD_ID_INDEX 5
+#define CRSF_TELEMETRY_FIELD_CHUNK_INDEX 6
 #define CRSF_TELEMETRY_CRC_LENGTH 1
 #define CRSF_TELEMETRY_TOTAL_SIZE(x) (x + CRSF_FRAME_LENGTH_EXT_TYPE_CRC)
+
 
 // Macros for big-endian (assume little endian host for now) etc
 #define CRSF_DEC_U16(x) ((uint16_t)__builtin_bswap16(x))
@@ -96,6 +99,7 @@ typedef enum
     CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY = 0x2B,
     CRSF_FRAMETYPE_PARAMETER_READ = 0x2C,
     CRSF_FRAMETYPE_PARAMETER_WRITE = 0x2D,
+    CRSF_FRAMETYPE_BARO_ALTITUDE = 0x09,
 
     //CRSF_FRAMETYPE_ELRS_STATUS = 0x2E, ELRS good/bad packet count and status flags
     
@@ -109,14 +113,18 @@ typedef enum
     CRSF_FRAMETYPE_MSP_WRITE = 0x7C, // write with 8 byte chunked binary (OpenTX outbound telemetry buffer limit)
     // Ardupilot frames
     CRSF_FRAMETYPE_ARDUPILOT_RESP = 0x80,
+
 } crsf_frame_type_e;
 
 typedef enum {
-    SUBCOMMAND_CRSF = 0x10
+    SUBCOMMAND_CRSF = 0x10,
+    CRSF_COMMAND_SUBCMD_RX = 0x10
 } crsf_command_e;
 
 typedef enum {
-    COMMAND_MODEL_SELECT_ID = 0x05
+    COMMAND_MODEL_SELECT_ID = 0x05,
+    CRSF_COMMAND_SUBCMD_RX_BIND = 0x01,
+    CRSF_COMMAND_MODEL_SELECT_ID = 0x05
 } crsf_subcommand_e;
 
 enum {
@@ -132,7 +140,8 @@ enum {
     CRSF_FRAME_ATTITUDE_PAYLOAD_SIZE = 6,
     CRSF_FRAME_DEVICE_INFO_PAYLOAD_SIZE = 48,
     CRSF_FRAME_FLIGHT_MODE_PAYLOAD_SIZE = 16,
-    CRSF_FRAME_GENERAL_RESP_PAYLOAD_SIZE = CRSF_EXT_FRAME_SIZE(CRSF_FRAME_TX_MSP_FRAME_SIZE)
+    CRSF_FRAME_GENERAL_RESP_PAYLOAD_SIZE = CRSF_EXT_FRAME_SIZE(CRSF_FRAME_TX_MSP_FRAME_SIZE),
+    CRSF_FRAME_BARO_ALTITUDE_PAYLOAD_SIZE = 4, // TBS version is 2, ELRS is 4 (combines vario)
 };
 
 typedef enum
@@ -178,7 +187,7 @@ typedef enum
 // These flags are or'ed with the field type above to hide the field from the normal LUA view
 #define CRSF_FIELD_HIDDEN 0x80          // marked as hidden in all LUA responses
 #define CRSF_FIELD_ELRS_HIDDEN 0x40     // marked as hidden when talking to ELRS specific LUA
-
+#define CRSF_FIELD_TYPE_MASK    ~(CRSF_FIELD_HIDDEN|CRSF_FIELD_ELRS_HIDDEN)
 /**
  * Define the shape of a standard header
  */
@@ -188,6 +197,8 @@ typedef struct crsf_header_s
     uint8_t frame_size;  // counts size after this byte, so it must be the payload size + 2 (type and crc)
     uint8_t type;        // from crsf_frame_type_e
 } PACKED crsf_header_t;
+
+#define CRSF_MK_FRAME_T(payload) struct payload##_frame_s { crsf_header_t h; payload p; uint8_t crc; } PACKED
 
 // Used by extended header frames (type in range 0x28 to 0x96)
 typedef struct crsf_ext_header_s
@@ -199,6 +210,8 @@ typedef struct crsf_ext_header_s
     // Extended fields
     uint8_t dest_addr;
     uint8_t orig_addr;
+    uint8_t payload[0];
+
 } PACKED crsf_ext_header_t;
 
 /**
@@ -243,7 +256,7 @@ typedef struct deviceInformationPacket_s
     uint8_t parameterVersion;
 } PACKED deviceInformationPacket_t;
 
-#define DEVICE_INFORMATION_PAYLOAD_LENGTH (sizeof(deviceInformationPacket_t) + sizeof(DEVICE_NAME))
+#define DEVICE_INFORMATION_PAYLOAD_LENGTH (sizeof(deviceInformationPacket_t) + strlen(device_name)+1)
 #define DEVICE_INFORMATION_LENGTH (sizeof(crsf_ext_header_t) + DEVICE_INFORMATION_PAYLOAD_LENGTH + CRSF_FRAME_CRC_SIZE)
 #define DEVICE_INFORMATION_FRAME_SIZE (DEVICE_INFORMATION_PAYLOAD_LENGTH + CRSF_FRAME_LENGTH_EXT_TYPE_CRC)
 
@@ -261,6 +274,11 @@ union inBuffer_U
                                 // add other packet types here
 };
 
+typedef struct crsf_sensor_baro_vario_s
+{
+    uint16_t altitude; // Altitude in decimeters + 10000dm, or Altitude in meters if high bit is set, BigEndian
+    int16_t verticalspd;  // Vertical speed in cm/s, BigEndian
+} PACKED crsf_sensor_baro_vario_t;
 
 typedef struct crsf_channels_s crsf_channels_t;
 
@@ -334,19 +352,22 @@ static uint16_t ICACHE_RAM_ATTR fmap(uint16_t x, uint16_t in_min, uint16_t in_ma
 // Scale a full range crossfire value to 988-2012 (Taransi channel uS)
 static inline uint16_t ICACHE_RAM_ATTR CRSF_to_US(uint16_t val)
 {
-    return fmap(val, 172, 1811, 988, 2012);
+    //return fmap(val, 172, 1811, 988, 2012);
+    return fmap(val, CRSF_CHANNEL_VALUE_MIN, CRSF_CHANNEL_VALUE_MAX, 988, 2012);
 }
 
 // Scale down a 10-bit value to a full range crossfire value
 static inline uint16_t ICACHE_RAM_ATTR UINT10_to_CRSF(uint16_t val)
 {
-    return fmap(val, 0, 1024, 172, 1811);
+    //return fmap(val, 0, 1024, 172, 1811);
+    return fmap(val, 0, 1023, CRSF_CHANNEL_VALUE_MIN, CRSF_CHANNEL_VALUE_MAX);
 }
 
 // Scale up a full range crossfire value to 10-bit
 static inline uint16_t ICACHE_RAM_ATTR CRSF_to_UINT10(uint16_t val)
 {
-    return fmap(val, 172, 1811, 0, 1023);
+    //return fmap(val, 172, 1811, 0, 1023);
+    return fmap(val, CRSF_CHANNEL_VALUE_MIN, CRSF_CHANNEL_VALUE_MAX, 0, 1023);
 }
 
 // Convert 0-max to the CRSF values for 1000-2000
